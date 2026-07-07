@@ -1,0 +1,618 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+game:GetService("Players").LocalPlayer.PlayerGui.Intro.Enabled = false
+-- ============================================================================
+-- 1. CAMERA TOGGLE
+-- ============================================================================
+local isFirstPerson = false
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end 
+
+    if input.KeyCode == Enum.KeyCode.X then
+        isFirstPerson = not isFirstPerson
+
+        if isFirstPerson then
+            LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+        else
+            LocalPlayer.CameraMode = Enum.CameraMode.Classic
+            
+            LocalPlayer.CameraMinZoomDistance = 10
+            LocalPlayer.CameraMaxZoomDistance = 10
+            
+            task.wait() 
+            LocalPlayer.CameraMinZoomDistance = 0.5
+            LocalPlayer.CameraMaxZoomDistance = 128
+        end
+    end
+end)
+
+-- ============================================================================
+-- 2. LIGHTING CONTROL
+-- ============================================================================
+Lighting.TimeOfDay = "12:00:00"
+RunService.Heartbeat:Connect(function()
+    if Lighting.ClockTime ~= 12 then
+        Lighting.ClockTime = 12
+    end
+end)
+
+-- ============================================================================
+-- 3. PROXIMITY PROMPTS
+-- ============================================================================
+local function overpowerPrompt(instance)
+    if instance:IsA("ProximityPrompt") then
+        instance.MaxActivationDistance = 10
+        instance.HoldDuration = 0
+        instance.RequiresLineOfSight = false
+    end
+end
+
+for _, descendant in ipairs(Workspace:GetDescendants()) do
+    overpowerPrompt(descendant)
+end
+Workspace.DescendantAdded:Connect(overpowerPrompt)
+
+-- ============================================================================
+-- 4. DYNAMIC UI CONFIGURATION & AUTO-RECOVERY
+-- ============================================================================
+local SerID = nil
+local VLabel = nil
+
+-- Automatically hooks back onto the UI after you respawn and re-applies formatting
+local function updateUIReferences()
+    if VLabel and VLabel:IsDescendantOf(game) and SerID and SerID:IsDescendantOf(game) then
+        return true -- References are still healthy and valid
+    end
+
+    local PlayerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not PlayerGui then return false end
+
+    local StatusIndicator = PlayerGui:FindFirstChild("StatusIndicator")
+    local MoneyFrame = StatusIndicator and StatusIndicator:FindFirstChild("MoneyFrame")
+    
+    if MoneyFrame then
+        SerID = MoneyFrame:FindFirstChild("ServerID")
+        if SerID then
+            SerID.Text = "Server ID: 0000-0000"
+        end
+
+        local TargetLabel = MoneyFrame:FindFirstChild("VersionLabel")
+        if TargetLabel then
+            VLabel = TargetLabel
+            VLabel.Position = UDim2.new(0, 0, 1.5, 0)
+            VLabel.Size = UDim2.new(1, 0, 15, 0)
+            VLabel.TextYAlignment = Enum.TextYAlignment.Top
+            VLabel.TextXAlignment = Enum.TextXAlignment.Left
+            VLabel.TextStrokeTransparency = 0
+            VLabel.TextTransparency = 0
+            return true
+        end
+    end
+    return false
+end
+
+local EliteItems = {
+    "W.C.F Bionic Vest", "TYRANT Neckguard", "TYRANT Helmet", "M82A1", 
+    "Tunnel LVL III Keycard", "Tunnel Backdoor Keycard", "W.C.F Bionic Helmet",
+	 "Jewelry Box", "Choratonzyne Ore", "MCX Spear", "Backhouse Key", "M4A1 Gunsmith"
+}
+local PrototypeItems = {
+    "VIDR Backpack", "Leviathan Breather", "ACW-R", "Gold Bar", 
+    "W.C.F Heavy Vest", "T-7 Thermal Goggles", "Seaside House Garage Key", 
+	"Old Shack Key", "W.C.F Butcher Helmet"
+}
+local ClassifiedItems = {
+    "W.C.F Armor Plate", "Vityaz-S Helmet", "W.C.F Guide Backpack", "RPK-16", 
+    "Diamond Figurine", "SCAR SSR", "ASVAL MODDED", "PKM", "50.BMG 5rd", 
+    "W.C.F Plated Helmet", "Tunnel Storage Keycard", "Gemstone Earrings", 
+	"Green Flare", "SWAT Shield", "W.C.F Air Breather"
+}
+
+
+local ItemTiers = {}
+for _, item in ipairs(EliteItems) do ItemTiers[item] = "Elite" end
+for _, item in ipairs(PrototypeItems) do ItemTiers[item] = "Prototype" end
+for _, item in ipairs(ClassifiedItems) do ItemTiers[item] = "Classified" end
+
+local TierSettings = {
+    Elite = {Color = Color3.fromRGB(255, 0, 200), Priority = 3, Icon = "[!]"},
+    Prototype = {Color = Color3.fromRGB(215, 75, 0), Priority = 2, Icon = "[*]"},
+    Classified = {Color = Color3.fromRGB(0, 190, 200), Priority = 1, Icon = "[+]"}
+}
+
+if getgenv().InvCheckerCleanup then getgenv().InvCheckerCleanup() end
+
+-- ============================================================================
+-- 5. TRACKING & EVALUATION RUNTIME
+-- ============================================================================
+local function getClosestPlayerToCursor()
+    local mouseLocation = UserInputService:GetMouseLocation()
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local vector, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+                if onScreen then
+                    local distance = (Vector2.new(vector.X, vector.Y) - mouseLocation).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closestPlayer = p
+                    end
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+local function getInventoryString(p)
+    local text = p.DisplayName .. "'s Equipment:\n\n"
+    local inventory = p:FindFirstChild("Inventory")
+    
+    if inventory then
+        local equipment = inventory:FindFirstChild("Equipment")
+        if equipment then
+            local items = equipment:GetChildren()
+            if #items == 0 then
+                text = text .. "- (Empty)"
+            else
+                for _, item in ipairs(items) do
+                    local nameStr = item.Name
+                    local itemNameVal = item:FindFirstChild("ItemName")
+                    
+                    if itemNameVal and itemNameVal:IsA("StringValue") then
+                        nameStr = itemNameVal.Value
+                    elseif item:IsA("StringValue") then
+                        nameStr = item.Value
+                    end
+                    text = text .. "- " .. nameStr .. "\n"
+                end
+            end
+        else
+            text = text .. "Gun"
+        end
+    else
+        text = text .. "Weapon"
+    end
+    return text
+end
+
+local function getHighestTierForPlayer(p)
+    local inv = p:FindFirstChild("Inventory")
+    if not inv then return nil end
+
+    local highestPriority = 0
+    local targetTier = nil
+
+    local function checkItem(itemInstance)
+        local itemName = itemInstance.Name
+        local nameVal = itemInstance:FindFirstChild("ItemName")
+        
+        if nameVal and nameVal:IsA("StringValue") then
+            itemName = nameVal.Value
+        elseif itemInstance:IsA("StringValue") then
+            itemName = itemInstance.Value
+        end
+
+        local tierName = ItemTiers[itemName]
+        if tierName then
+            local priority = TierSettings[tierName].Priority
+            if priority > highestPriority then
+                highestPriority = priority
+                targetTier = tierName
+            end
+        end
+    end
+
+    local equipment = inv:FindFirstChild("Equipment")
+    if equipment then
+        for _, item in ipairs(equipment:GetChildren()) do
+            checkItem(item)
+        end
+    end
+
+    return targetTier
+end
+
+-- Hover UI update loop
+local lastClosest = nil
+local lastUpdate = 0
+local THROTTLE_INTERVAL = 0.1 
+
+local connection = RunService.RenderStepped:Connect(function()
+    if not updateUIReferences() then return end
+    
+    local closest = getClosestPlayerToCursor()
+    
+    if closest then
+        local now = os.clock()
+        if closest ~= lastClosest or (now - lastUpdate) >= THROTTLE_INTERVAL then
+            lastClosest = closest
+            lastUpdate = now
+            
+            VLabel.Text = getInventoryString(closest) 
+            local tier = getHighestTierForPlayer(closest)
+            if tier then
+                VLabel.TextColor3 = TierSettings[tier].Color
+            else
+                VLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+            end
+        end
+    else
+        if lastClosest ~= nil then
+            lastClosest = nil
+            VLabel.Text = ""
+        end
+    end
+end)
+
+-- ============================================================================
+-- BACKGROUND AUTOMATIC NOTIFIER LOOP
+-- ============================================================================
+getgenv().ItemNotifierActive = true
+local notifiedCache = {} 
+
+local function scanAllInventories()
+    local currentItems = {}
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local inv = p:FindFirstChild("Inventory")
+        if not inv then continue end
+
+        currentItems[p.Name] = {}
+
+        local function processItem(itemInstance)
+            local itemName = itemInstance.Name
+            local nameVal = itemInstance:FindFirstChild("ItemName")
+            
+            if nameVal and nameVal:IsA("StringValue") then
+                itemName = nameVal.Value
+            elseif itemInstance:IsA("StringValue") then
+                itemName = itemInstance.Value
+            end
+
+            local tier = ItemTiers[itemName]
+
+            if tier then
+                currentItems[p.Name][itemName] = true
+                
+                if not (notifiedCache[p.Name] and notifiedCache[p.Name][itemName]) then
+                    local settings = TierSettings[tier]
+                    
+                    StarterGui:SetCore("SendNotification", {
+                        Title = p.DisplayName,
+                        Text = "[" .. tier .. "] " .. itemName .. " " .. settings.Icon,
+                        Duration = 6
+                    })
+                end
+            end
+        end
+
+        local equipment = inv:FindFirstChild("Equipment")
+        if equipment then 
+            for _, item in ipairs(equipment:GetChildren()) do 
+                processItem(item) 
+            end 
+        end
+    end
+
+    notifiedCache = currentItems
+end
+
+task.spawn(function()
+    while getgenv().ItemNotifierActive do
+        scanAllInventories()
+        task.wait(3)
+    end
+end)
+
+getgenv().InvCheckerCleanup = function()
+    connection:Disconnect()
+    getgenv().ItemNotifierActive = false
+    if VLabel and VLabel:IsDescendantOf(game) then VLabel.Text = "" end
+    getgenv().InvCheckerCleanup = nil
+end
+
+-- ============================================================================
+-- 6. BOT TRACKING ENGINE (ESP & HITBOX)
+-- ============================================================================
+local targetName = "Tyrant"
+
+local function setupESP(bot)
+    if not bot:FindFirstChild("BotHighlight") then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "BotHighlight"
+        highlight.FillTransparency = 0.8
+        highlight.FillColor = Color3.fromRGB(255, 0, 0)
+        highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+        highlight.OutlineTransparency = 0
+        highlight.Parent = bot
+    end
+end
+
+local function setupNameHealthESP(bot)
+    local head = bot:WaitForChild("Head", 5)
+    local humanoid = bot:WaitForChild("Humanoid", 5)
+    if not head or not humanoid then return end
+
+    if head:FindFirstChild("BotTextESP") then 
+        head.BotTextESP:Destroy() 
+    end
+
+    local maxHealth = 10000
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "BotTextESP"
+    billboard.AlwaysOnTop = true
+    billboard.Size = UDim2.new(0, 200, 0, 50)
+    billboard.StudsOffset = Vector3.new(0, 3.5, 0) 
+    billboard.Parent = head
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Name = "NameLabel"
+    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = bot.Name
+    nameLabel.TextColor3 = Color3.fromRGB(255, 30, 30)
+    nameLabel.TextSize = 14
+    nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.Parent = billboard
+
+    local healthLabel = Instance.new("TextLabel")
+    healthLabel.Name = "HealthLabel"
+    healthLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    healthLabel.Position = UDim2.new(0, 0, 0.5, 0)
+    healthLabel.BackgroundTransparency = 1
+    healthLabel.Text = math.floor(humanoid.Health) .. " / " .. maxHealth
+    healthLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+    healthLabel.TextSize = 12
+    healthLabel.Font = Enum.Font.SourceSansBold
+    healthLabel.TextStrokeTransparency = 0
+    healthLabel.Parent = billboard
+
+    local function updateHealthDisplay(currentHealth)
+        healthLabel.Text = math.floor(currentHealth) .. " / " .. maxHealth
+        local pct = math.clamp(currentHealth / maxHealth, 0, 1)
+        healthLabel.TextColor3 = Color3.fromHSV(pct * 0.33, 1, 1) 
+    end
+
+    humanoid.HealthChanged:Connect(updateHealthDisplay)
+end
+
+local function expandHitbox(bot)
+    local head = bot:FindFirstChild("Head")
+    if head then
+        head.Size = Vector3.new(10, 10, 10)
+        head:GetPropertyChangedSignal("Size"):Connect(function()
+            if head.Size ~= Vector3.new(10, 10, 10) then
+                head.Size = Vector3.new(10, 10, 10)
+                head.Transparency = 1
+                local face = head:FindFirstChild("face")
+                if face then face.Transparency = 1 end
+            end
+        end)
+    end
+end
+
+local function processBot(model)
+    if model.Name == targetName then
+        setupESP(model)
+        expandHitbox(model)
+        setupNameHealthESP(model)
+    end
+end
+
+local botsFolder = Workspace:WaitForChild("Bots", 5)
+if botsFolder then
+    for _, child in ipairs(botsFolder:GetChildren()) do
+        processBot(child)
+    end
+    botsFolder.ChildAdded:Connect(processBot)
+end
+
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local savedCFrame = nil
+
+local function getHRP()
+    local character = player.Character or player.CharacterAdded:Wait()
+    return character:WaitForChild("HumanoidRootPart")
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if gameProcessedEvent then return end
+
+    if input.KeyCode == Enum.KeyCode.KeypadOne then
+        local hrp = getHRP()
+        savedCFrame = hrp.CFrame
+
+    elseif input.KeyCode == Enum.KeyCode.KeypadTwo then
+        if not savedCFrame then return end
+
+        ReplicatedStorage.AllowRespawn:FireServer()
+
+        -- Wait for a fresh character, but don't hang forever if none comes
+        local newCharacter = player.Character
+        local success = pcall(function()
+            newCharacter = player.CharacterAdded:Wait()
+        end)
+
+        local hrp = getHRP()
+        task.wait(0.3) -- let physics settle after spawn
+        hrp.CFrame = savedCFrame
+    end
+end)
+
+-- [[ 1. ITEM DICTIONARY & TIERS ]] --
+local EliteItems = {
+    "W.C.F Bionic Vest", "TYRANT Neckguard", "TYRANT Helmet", "M82A1", 
+    "Tunnel LVL III Keycard", "Tunnel Backdoor Keycard", "W.C.F Bionic Helmet",
+	 "Jewelry Box", "Choratonzyne Ore", "MCX Spear", "Backhouse Key", "M4A1 Gunsmith"
+}
+local PrototypeItems = {
+    "VIDR Backpack", "Leviathan Breather", "ACW-R", "Gold Bar", 
+    "W.C.F Heavy Vest", "T-7 Thermal Goggles", "Seaside House Garage Key", 
+	"Old Shack Key", "W.C.F Butcher Helmet"
+}
+local ClassifiedItems = {
+    "W.C.F Armor Plate", "Vityaz-S Helmet", "W.C.F Guide Backpack", "RPK-16", 
+    "Diamond Figurine", "SCAR SSR", "ASVAL MODDED", "PKM", "50.BMG 5rd", 
+    "W.C.F Plated Helmet", "Tunnel Storage Keycard", "Gemstone Earrings", 
+	"Green Flare", "SWAT Shield", "W.C.F Air Breather"
+}
+
+local ItemTiers = {}
+for _, item in ipairs(EliteItems) do ItemTiers[item] = "Elite" end
+for _, item in ipairs(PrototypeItems) do ItemTiers[item] = "Prototype" end
+for _, item in ipairs(ClassifiedItems) do ItemTiers[item] = "Classified" end
+
+local TierSettings = {
+    Elite = {Color = Color3.fromRGB(255, 0, 200), Priority = 3},
+    Prototype = {Color = Color3.fromRGB(215, 75, 0), Priority = 2},
+    Classified = {Color = Color3.fromRGB(0, 190, 200), Priority = 1}
+}
+
+-- Track hooked string values to prevent memory leaks
+local HookedItems = {}
+
+-- [[ 2. CORE LOGIC ]] --
+
+-- Re-evaluates a specific container whenever an item changes or streams in
+local function evaluateContainer(container)
+    if not container then return end
+    
+    local slotsFolder = container:FindFirstChild("Slots")
+    if not slotsFolder then return end
+
+    local foundItems = {}
+    local highestPriority = 0
+    local bestColor = Color3.fromRGB(255, 255, 255)
+
+    -- Scan current slots
+    for _, slot in ipairs(slotsFolder:GetChildren()) do
+        local itemNameObj = slot:FindFirstChild("ItemName")
+        if itemNameObj and itemNameObj:IsA("StringValue") and itemNameObj.Value ~= "" then
+            local tierName = ItemTiers[itemNameObj.Value]
+            if tierName and TierSettings[tierName] then
+                local settings = TierSettings[tierName]
+                table.insert(foundItems, itemNameObj.Value)
+                if settings.Priority > highestPriority then
+                    highestPriority = settings.Priority
+                    bestColor = settings.Color
+                end
+            end
+        end
+    end
+
+    -- Update or Destroy Visuals
+    local highlight = container:FindFirstChild("LootHighlight")
+    local billboard = container:FindFirstChild("LootNametag")
+
+    if #foundItems > 0 then
+        if not highlight then
+            highlight = Instance.new("Highlight")
+            highlight.Name = "LootHighlight"
+            highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+            highlight.FillTransparency = 0.5
+            highlight.Parent = container
+        end
+        highlight.FillColor = bestColor 
+
+        if not billboard then
+            billboard = Instance.new("BillboardGui")
+            billboard.Name = "LootNametag"
+            billboard.StudsOffset = Vector3.new(0, 3, 0)
+            billboard.AlwaysOnTop = true
+            billboard.MaxDistance = math.huge 
+            
+            local textLabel = Instance.new("TextLabel")
+            textLabel.Name = "ItemText"
+            textLabel.Size = UDim2.new(1, 0, 1, 0)
+            textLabel.BackgroundTransparency = 1
+            textLabel.TextStrokeTransparency = 0
+            textLabel.TextSize = 14
+            textLabel.Font = Enum.Font.Code
+            textLabel.TextYAlignment = Enum.TextYAlignment.Bottom
+            textLabel.Parent = billboard
+            
+            billboard.Parent = container
+        end
+        
+        billboard.Size = UDim2.new(0, 250, 0, 20 + (#foundItems * 15))
+        local textLabel = billboard:FindFirstChild("ItemText")
+        if textLabel then
+            textLabel.TextColor3 = bestColor
+            textLabel.Text = table.concat(foundItems, "\n")
+        end
+    else
+        if highlight then highlight:Destroy() end
+        if billboard then billboard:Destroy() end
+    end
+end
+
+-- Processes an ItemName StringValue when it loads into the game
+local function onItemNameAdded(itemNameObj)
+    if HookedItems[itemNameObj] then return end
+    HookedItems[itemNameObj] = true
+
+    -- Safely clear tracking if this item streams out
+    itemNameObj.AncestryChanged:Connect(function(_, newParent)
+        if not newParent then HookedItems[itemNameObj] = nil end
+    end)
+
+    -- Find the container this item belongs to
+    local slot = itemNameObj.Parent
+    local slotsFolder = slot and slot.Parent
+    local container = slotsFolder and slotsFolder.Parent
+
+    if container then
+        -- Run an immediate check
+        task.defer(function()
+            evaluateContainer(container)
+        end)
+
+        -- Listen for player taking the item
+        itemNameObj:GetPropertyChangedSignal("Value"):Connect(function()
+            evaluateContainer(container)
+        end)
+    end
+end
+
+-- [[ 3. GLOBAL DETECTION ]] --
+
+local containersFolder = workspace:WaitForChild("Containers", 10)
+
+if containersFolder then
+    -- 1. Scan everything currently loaded in
+    for _, obj in ipairs(containersFolder:GetDescendants()) do
+        if obj.Name == "ItemName" and obj:IsA("StringValue") then
+            onItemNameAdded(obj)
+        end
+    end
+
+    -- 2. Catch anything that streams in or is spawned later
+    containersFolder.DescendantAdded:Connect(function(obj)
+        if obj.Name == "ItemName" and obj:IsA("StringValue") then
+            onItemNameAdded(obj)
+        end
+    end)
+else
+    warn("Could not find 'Containers' folder in the workspace!")
+end
