@@ -8,10 +8,8 @@ local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
-game:GetService("Players").LocalPlayer.PlayerGui.Intro.Enabled = false
--- ============================================================================
--- 1. CAMERA TOGGLE
--- ============================================================================
+-- CAMERA TOGGLE
+
 local isFirstPerson = false
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -35,9 +33,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
--- ============================================================================
--- 2. LIGHTING CONTROL
--- ============================================================================
+-- LIGHTING CONTROL
 Lighting.TimeOfDay = "12:00:00"
 RunService.Heartbeat:Connect(function()
     if Lighting.ClockTime ~= 12 then
@@ -45,9 +41,7 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- ============================================================================
--- 3. PROXIMITY PROMPTS
--- ============================================================================
+-- PROXIMITY PROMPTS
 local function overpowerPrompt(instance)
     if instance:IsA("ProximityPrompt") then
         instance.MaxActivationDistance = 10
@@ -61,9 +55,7 @@ for _, descendant in ipairs(Workspace:GetDescendants()) do
 end
 Workspace.DescendantAdded:Connect(overpowerPrompt)
 
--- ============================================================================
--- 4. DYNAMIC UI CONFIGURATION & AUTO-RECOVERY
--- ============================================================================
+-- DYNAMIC UI CONFIGURATION & AUTO-RECOVERY
 local SerID = nil
 local VLabel = nil
 
